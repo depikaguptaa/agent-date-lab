@@ -38,12 +38,10 @@ Vercel uses `vercel.json` and the dependency-free `npm run build` command. The b
 
 This is a public-profile topic-similarity prototype, not a deployed dating service. Sample data and custom text are handled as stated above.
 
-## Challenge form copy
-
-**Overall explanation (under 200 characters):**
+**Overall explanation:**
 
 > The Date Lab welcomes LGBTQIA+ people, gives each profile an advocate agent, stages a fictional exchange, and ranks public-topic overlap without guessing identity or consent.
 
-**Technical section (under 500 characters):**
+**Technical section:**
 
 > Vanilla JavaScript with a self-contained Fetch handler. It reads LinkedIn and Instagram URLs anonymously, follows up to three validated same-platform redirects, times out at 15 seconds per hop, caps HTML at 1 MB, and extracts public title/description metadata. If blocked, users paste visible text from those same pages. Analysis and four-turn advocate role-play use deterministic rules. No LLM, account, proxy, or paid API. Seed evidence is manually paraphrased.
