@@ -1,12 +1,23 @@
 const FILES = __ASSET_MAP__;
 const MAX_BYTES = 1_000_000;
+const INSTAGRAM_ROUTES = new Set(["about","accounts","developer","direct","explore","p","reel","reels","stories","tv"]);
+const LINKEDIN_HOSTS = new Set(["linkedin.com","www.linkedin.com","uk.linkedin.com","ca.linkedin.com","in.linkedin.com"]);
+const INSTAGRAM_HOSTS = new Set(["instagram.com","www.instagram.com"]);
+
+function profilePlatform(url) {
+  if (LINKEDIN_HOSTS.has(url.hostname)) return "linkedin";
+  if (INSTAGRAM_HOSTS.has(url.hostname)) return "instagram";
+  return null;
+}
 
 function allowedProfile(input) {
   let url;
   try { url = new URL(input); } catch { return null; }
-  if (url.protocol !== "https:") return null;
-  const linkedin = ["linkedin.com","www.linkedin.com","uk.linkedin.com","ca.linkedin.com","in.linkedin.com"].includes(url.hostname) && /^\/in\/[A-Za-z0-9_%.-]+\/?$/.test(url.pathname);
-  const instagram = ["instagram.com", "www.instagram.com"].includes(url.hostname) && /^\/[A-Za-z0-9._]+\/?$/.test(url.pathname);
+  if (url.protocol !== "https:" || url.username || url.password || url.port) return null;
+  const platform = profilePlatform(url);
+  const instagramName = url.pathname.replace(/^\//,"").replace(/\/$/,"").toLowerCase();
+  const linkedin = platform === "linkedin" && /^\/in\/[A-Za-z0-9_%.-]+\/?$/.test(url.pathname);
+  const instagram = platform === "instagram" && /^\/[A-Za-z0-9._]+\/?$/.test(url.pathname) && !INSTAGRAM_ROUTES.has(instagramName);
   if (!linkedin && !instagram) return null;
   url.hash = "";
   url.search = "";
@@ -25,8 +36,14 @@ function decodeEntities(value) {
 }
 
 function clean(value) {
-  return decodeEntities(String(value || "").replace(/<[^>]*>/g," ").replace(/\\u003c/gi," "))
-    .replace(/[\u0000-\u001f\u007f]/g," ").replace(/\s+/g," ").trim().slice(0,6000);
+  let text=String(value || "").replace(/<[^>]*>/g," ").replace(/\\u003c/gi," ");
+  text=decodeEntities(decodeEntities(text));
+  return text.replace(/<[^>]*>/g," ").replace(/[\u0000-\u001f\u007f]/g," ").replace(/\s+/g," ").trim().slice(0,6000);
+}
+
+function stripPlatformChrome(value) {
+  return value.replace(/\bView\s+.{1,180}?\s+profile\s+on\s+LinkedIn,\s+a\s+professional\s+community\s+of\s+[^.]*\.?/gi," ")
+    .replace(/\s+/g," ").trim();
 }
 
 function pageSignals(html) {
@@ -35,11 +52,10 @@ function pageSignals(html) {
     const attrs = {};
     for (const match of tag.matchAll(/([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g)) attrs[match[1].toLowerCase()] = match[2] ?? match[3] ?? match[4] ?? "";
     const key = (attrs.property || attrs.name || "").toLowerCase();
-    if (key && attrs.content) meta[key] = clean(attrs.content);
+    if (key && attrs.content) meta[key] = stripPlatformChrome(clean(attrs.content));
   }
-  const title = clean((html.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || "");
-  const visible = clean(html.replace(/<(script|style|noscript|svg|iframe|template)\b[^>]*>[\s\S]*?<\/\1>/gi," ").replace(/<[^>]+>/g," "));
-  const parts = [meta["og:title"],meta["og:description"],meta.description,meta["profile:first_name"],meta["profile:last_name"],title,visible]
+  const title = stripPlatformChrome(clean((html.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || ""));
+  const parts = [meta["og:title"],meta["og:description"],meta.description,meta["profile:first_name"],meta["profile:last_name"],title]
     .filter(Boolean);
   return [...new Set(parts)].join("\n").slice(0,6000);
 }
@@ -66,17 +82,19 @@ async function readLimited(response) {
 
 async function fetchProfile(start) {
   let current = start;
+  const platform = profilePlatform(start);
   for (let hops = 0; hops <= 3; hops++) {
     const response = await fetch(current.href, {
       method:"GET",
       redirect:"manual",
+      signal:AbortSignal.timeout(15000),
       headers:{"accept":"text/html,application/xhtml+xml","user-agent":"DateLabPublicProfileReader/1.0 (+anonymous, single-page request)"}
     });
     if ([301,302,303,307,308].includes(response.status)) {
       const location = response.headers.get("location");
       if (!location || hops === 3) return {state:"redirected",text:"",message:"The profile redirected outside a readable public page. Paste visible text from the linked profile."};
       const next = allowedProfile(new URL(location,current).href);
-      if (!next) return {state:"redirected",text:"",message:"The profile redirected to a different host. No redirected content was read."};
+      if (!next || profilePlatform(next) !== platform) return {state:"redirected",text:"",message:"The profile redirected to a different platform or non-profile page. No redirected content was read."};
       current = next;
       continue;
     }
@@ -94,17 +112,24 @@ function json(data,status=200) {
   return new Response(JSON.stringify(data),{status,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store","x-content-type-options":"nosniff"}});
 }
 
+function withoutBody(response) {
+  return new Response(null,{status:response.status,headers:response.headers});
+}
+
 function asset(path) {
   const file = FILES[path];
   if (!file) return new Response("Not found",{status:404,headers:{"content-type":"text/plain; charset=utf-8"}});
-  return new Response(file.body,{headers:{"content-type":file.type,"cache-control":path==="/"?"no-cache":"public, max-age=300","x-content-type-options":"nosniff","referrer-policy":"strict-origin-when-cross-origin","content-security-policy":"default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"}});
+  return new Response(file.body,{headers:{"content-type":file.type,"cache-control":path==="/index.html"?"no-cache":"public, max-age=300","x-content-type-options":"nosniff","referrer-policy":"strict-origin-when-cross-origin","content-security-policy":"default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"}});
 }
 
 export default {
   async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/api/read") {
-      if (request.method !== "GET") return json({state:"method_not_allowed",text:"",message:"Use GET to read a public profile."},405);
+      if (request.method !== "GET") {
+        const response=json({state:"method_not_allowed",text:"",message:"Use GET to read a public profile."},405);
+        return request.method==="HEAD"?withoutBody(response):response;
+      }
       const target = allowedProfile(url.searchParams.get("url") || "");
       if (!target) return json({state:"invalid_url",text:"",message:"Use an HTTPS LinkedIn /in/ profile or Instagram profile URL."},400);
       try { return json(await fetchProfile(target)); }
@@ -115,6 +140,7 @@ export default {
     }
     if (request.method !== "GET" && request.method !== "HEAD") return new Response("Method not allowed",{status:405,headers:{allow:"GET, HEAD"}});
     const path = url.pathname === "/" ? "/index.html" : url.pathname;
-    return asset(path);
+    const response=asset(path);
+    return request.method==="HEAD"?withoutBody(response):response;
   }
 };

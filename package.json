@@ -1,0 +1,8 @@
+{
+  "name": "the-date-lab",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bash scripts/build.sh"
+  }
+}

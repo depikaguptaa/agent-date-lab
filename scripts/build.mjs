@@ -8,8 +8,9 @@ const files = {
   "/index.html": { source: "src/index.html", type: "text/html; charset=utf-8" },
   "/app.js": { source: "src/app.js", type: "text/javascript; charset=utf-8" },
   "/people.js": { source: "src/people.js", type: "text/javascript; charset=utf-8" },
+  "/styles.css": { source: "src/styles.css", type: "text/css; charset=utf-8" },
 };
-const version = createHash("sha256").update(await readFile(resolve(root, files["/app.js"].source))).update(await readFile(resolve(root, files["/people.js"].source))).digest("hex").slice(0,12);
+const version = createHash("sha256").update(await readFile(resolve(root, files["/app.js"].source))).update(await readFile(resolve(root, files["/people.js"].source))).update(await readFile(resolve(root, files["/styles.css"].source))).digest("hex").slice(0,12);
 const assetMap = {};
 for (const [url, file] of Object.entries(files)) {
   const body = await readFile(resolve(root, file.source), "utf8");
@@ -22,6 +23,11 @@ if (output === template) throw new Error("Worker template marker was not replace
 const workerPath = resolve(dist, "server/index.js");
 await mkdir(dirname(workerPath), { recursive: true });
 await writeFile(workerPath, output);
+const publicDir = resolve(dist, "public");
+await mkdir(publicDir, { recursive: true });
+for (const [url, file] of Object.entries(assetMap)) {
+  await writeFile(resolve(publicDir, url.slice(1)), file.body);
+}
 await mkdir(resolve(dist, ".openai"), { recursive: true });
 await copyFile(resolve(root, ".openai/hosting.json"), resolve(dist, ".openai/hosting.json"));
 console.log(`Built ${workerPath}`);
